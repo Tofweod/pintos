@@ -88,8 +88,7 @@ struct thread
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
-    int waiting_time;                   /* 剩余等待时间片 */
-    int counter[4];                     /* 线程在每个ready队列中剩余时间配额,共三个队列，counter[0]表示现在进程所处队列序号 */
+    int waiting_time;                   /* 等待时间片 */
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */

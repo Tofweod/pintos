@@ -76,7 +76,6 @@ timer_ticks (void)
   return t;
 }
 
-//timer.c
 /* Returns the number of timer ticks elapsed since THEN, which
    should be a value once returned by timer_ticks(). */
 int64_t
@@ -99,11 +98,9 @@ timer_sleep (int64_t ticks)
   {
     if(thread_current()->status != THREAD_BLOCKED)
     {
-      /* 105，106行视作原子操作，不可中断，并服务于thread_block()的前文 */
       intr_disable();
       thread_current()->waiting_time = ticks;
       thread_block();
-      /* 此处的代码在sleep结束后进程重新running时执行，此时设置intr_level为ON以恢复中断 */
       intr_enable();
     }
   }

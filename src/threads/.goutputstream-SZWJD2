@@ -134,8 +134,10 @@ thread_tick (void)
   else
     kernel_ticks++;
   
+  intr_disable();
   thread_foreach(&sleep_and_wakeup,NULL);
-
+  intr_enable();
+  
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
