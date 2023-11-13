@@ -342,9 +342,8 @@ thread_foreach (thread_action_func *func, void *aux)
 }
 
 void
-sleep_and_wakeup(struct thread* t,void* aux)
+sleep_and_wakeup(struct thread* t,void* aux UNUSED)
 {
-  UNUSED(aux);
 
   if(t->status == THREAD_BLOCKED)
     if(t->waiting_time)
