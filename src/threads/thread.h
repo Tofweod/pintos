@@ -89,12 +89,14 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     int waiting_time;                   /* 剩余等待时间片 */
-    int mlfq[4];                     /* 线程在每个ready队列中剩余时间配额,共三个队列，counter[0]表示现在进程所处队列序号 */
+    int mlfq[4];                        /* 线程在每个ready队列中剩余时间配额,共三个队列，mlfq[MLFQ_SIZE]表示现在进程所处队列序号 */
     struct list_elem allelem;           /* List element for all threads list. */
 
+    // used for mlfq
+    struct list_elem ready_elem;
     /* Shared between thread.c and synch.c. */
+    // used only in synch.c
     struct list_elem elem;              /* List element. */
-
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */

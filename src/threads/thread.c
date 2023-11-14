@@ -44,7 +44,7 @@ static int splices[MLFQ_SIZE] = {2,4,8};
  * 经过指定tick后进行一次mlfq_emerge()
  * 需要注意该值的设定与splices数组以及调度策略有关，需要经过实践以得到更为优化的取值
 */
-#define EMERGE_TIME 50;
+#define EMERGE_TIME 50
 static int emerege_time = 0;
 
 /* List of all processes.  Processes are added to this list
@@ -114,8 +114,8 @@ thread_init (void)
   ASSERT (intr_get_level () == INTR_OFF);
 
   lock_init (&tid_lock);
-  
-  for(int i = 0;i < MLFQ_SIZE;i++)
+  int i;
+  for(i = 0;i < MLFQ_SIZE;i++)
   {
     list_init(&mlfq[i]);
   }
@@ -127,6 +127,8 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  // 此处需要手动添加initial_thread
+  add_to_mlfq(initial_thread,0);
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -148,45 +150,59 @@ thread_start (void)
 
 // 根据进程的优先级进行比较
 bool
-priority_less(const list_elem *a,const list_elem *b,void* aux UNUSED)
+priority_less(const struct list_elem *a,const struct list_elem *b,void* aux UNUSED)
 {
-  return list_entry(a,struct thread,elem)->priority > list_entry(b,struct thread,elem)->priority;
+  return list_entry(a,struct thread,ready_elem)->priority > list_entry(b,struct thread,ready_elem)->priority;
 }
 
 /**
  * 修改线程t至指定idx的mlfq队列中
- * idx==t->mlfq[0]情况说明t的优先级未改变，但注意schedule()内已经将tpop出队列，因此不用remove
- * idx不能越界
+ * idx不能越界，且idx != t->mlfq[MLFQ_SIZE]
  * 此处调用的priority_less()实现了如下规则：
  * 1.若优先级A>B,则调度A
  * 2.若优先级A=B,则FCFS
 */
 void
-change_to_mlfq(thread *t,int idx)
+change_to_mlfq(struct thread *t,int idx)
 {
   ASSERT(idx >= 0 && idx < MLFQ_SIZE);
-  if(idx != t->mlfq[0]) list_remove(&t->elem);
-  list_insert_ordered(&mlfq[idx],&t->elem,priority_less,NULL);
+  if(idx != t->mlfq[MLFQ_SIZE])
+  {
+    list_remove(&t->ready_elem);
+    list_insert_ordered(&mlfq[idx],&t->ready_elem,priority_less,NULL);
+    t->mlfq[MLFQ_SIZE] = idx;
+  }
+}
+
+/**
+ * 添加thread t前应确保队列中没有t，此函数不作保证，须谨慎使用
+*/
+void
+add_to_mlfq(struct thread *t,int idx)
+{
+  ASSERT(idx >= 0 && idx < MLFQ_SIZE);
+  list_insert_ordered(&mlfq[idx],&t->ready_elem,priority_less,NULL);
+  t->mlfq[MLFQ_SIZE] = idx;
 }
 //set and get of thread t's rest time in special mlfq
 void
-set_rest_time(thread *t,int idx)
+set_rest_time(struct thread *t,int idx)
 {
   t->mlfq[idx] = splices[idx];
 }
 
 int
-get_rest_time(thread *t,int idx)
+get_rest_time(struct thread *t,int idx)
 {
   return t->mlfq[idx];
 }
 
-// 一段时间后需要将所有thread上浮到最高优先级，预防饥饿现象
+// 一段时间后需要将所有非最高优先级队列thread上浮到最高优先级，预防饥饿现象
 void
 mlfq_emerge()
 {
   thread_foreach(&change_to_mlfq,0);
-  thread_foreach(&set_rest_time,splices[0]);
+  thread_foreach(&set_rest_time,0);
 }
 
 // thread.c
@@ -221,24 +237,25 @@ thread_tick (void)
 
   /* Enforce preemption. */
   // t在其优先队列中分配所得的时间片用完，降低到下一队列中,最低队列除外
-  if (!--t->mlfq[t->mlfq[0]])
+  if (!--t->mlfq[t->mlfq[MLFQ_SIZE]])
   {
-    if(t->mlfq[0] < MLFQ_SIZE-1)
+    if(t->mlfq[MLFQ_SIZE] < MLFQ_SIZE-1)
     {
-      change_to_mlfq(t,++t->mlfq[0]);
+      change_to_mlfq(t,t->mlfq[MLFQ_SIZE]+1);
+    }
+    else
+    {
+      list_remove(&t->ready_elem);
+      add_to_mlfq(&t->ready_elem,t->mlfq[MLFQ_SIZE]);
     }
     // 根据所在队列重新分配时间片
-    set_rest_time(t,t->mlfq[0]);
+    set_rest_time(t,t->mlfq[MLFQ_SIZE]);
     intr_yield_on_return();
   }
   /*
-    优先判断t时间片是否耗尽
-    若耗尽则不进行emerge_time判断，因为若此时需要emerge，会导致t二次加入到优先队列中
-    正因如此，上浮时间EMERGE_TIME是弹性的
-    我不知道这种弹性是否对性能有所影响，若影响较大则将优先判断emerge_time
-    此处仅仅关心避免饥饿
+    避免饥饿
   */ 
-  else if(!(emerege_time = (emerege_time+1)%EMERGE_TIME))
+  if(!(emerege_time = (emerege_time+1)%EMERGE_TIME))
   {
     mlfq_emerge();
     intr_yield_on_return();
@@ -329,8 +346,10 @@ thread_block (void)
 {
   ASSERT (!intr_context ());
   ASSERT (intr_get_level () == INTR_OFF);
-
-  thread_current ()->status = THREAD_BLOCKED;
+  
+  struct thread* t = thread_current();
+  list_remove(&t->ready_elem);
+  t->status = THREAD_BLOCKED;
   schedule ();
 }
 
@@ -351,12 +370,9 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  // list_push_back (ready_list, &t->elem);
-  // 如果线程在其剩余时间片内释放CPU,优先级不变
-  if(get_rest_time(t,t->mlfq[0]))
-  {
-    change_to_mlfq(t,t->mlfq[0]);
-  }
+  // 将唤醒thread置于最高优先级队列
+  // 因为t一定是blocked，因此其是thread_create()或thread_block()来的,即不在优先队列中，可放心加入
+  add_to_mlfq(t,0);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -410,6 +426,7 @@ thread_exit (void)
      when it calls thread_schedule_tail(). */
   intr_disable ();
   list_remove (&thread_current()->allelem);
+  list_remove(&thread_current()->ready_elem);
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
@@ -426,8 +443,13 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (ready_list, &cur->elem);
+  // 如果cur的时间片有剩余，则将其重新加入调度队列中
+  // 一般情况下此处的时间片应该永不为0，因为在time_interrupt中时间片为0时会重新设置其时间片并调用该函数
+  if (cur != idle_thread && get_rest_time(cur,cur->mlfq[MLFQ_SIZE]))
+  {
+    list_remove(&cur->ready_elem);
+    add_to_mlfq(cur,cur->mlfq[MLFQ_SIZE]);
+  }
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -597,10 +619,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->waiting_time = 0;
-  // 指定新建thread t应放入最高优先级队列
-  t->mlfq[0] = 0;
-  // 此处需要设置rest time,否则在unblock()时t不会加入调度队列中
-  set_rest_time(t,t->mlfq[0]);
+  // 新建线程放入最高优先队列中，设置其时间片，在thread_create()中会自动加入优先队列中
+  set_rest_time(t,0);
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 }
@@ -628,9 +648,10 @@ next_thread_to_run (void)
 {
   // 从最高优先队列开始调度
   ready_list = &mlfq[MLFQ_SIZE-1];
-  for(int i = 0;i < MLFQ_SIZE-1; i++)
+  int i;
+  for(i = 0;i < MLFQ_SIZE-1; i++)
   {
-    if(!list_empy(&mlfq[i]))
+    if(!list_empty(&mlfq[i]))
     {
       ready_list = &mlfq[i];
       break;
@@ -639,7 +660,8 @@ next_thread_to_run (void)
   if (list_empty (ready_list))
     return idle_thread;
   else
-    return list_entry (list_pop_front (ready_list), struct thread, elem);
+    // 不使用pop，以实现RP，因此在thread_exit()中需要添加list_remove(&t->ready_elem)
+    return list_entry (list_front (ready_list), struct thread, ready_elem);
 }
 
 /* Completes a thread switch by activating the new thread's page
