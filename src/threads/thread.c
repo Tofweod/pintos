@@ -626,7 +626,8 @@ alloc_frame (struct thread *t, size_t size)
 static struct thread *
 next_thread_to_run (void) 
 {
-  ready_list = &mlfq[2];
+  // 从最高优先队列开始调度
+  ready_list = &mlfq[MLFQ_SIZE-1];
   for(int i = 0;i < MLFQ_SIZE-1; i++)
   {
     if(!list_empy(&mlfq[i]))
