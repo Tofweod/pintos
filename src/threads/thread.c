@@ -38,7 +38,7 @@ struct list mlfq[MLFQ_SIZE];
 static struct list* ready_list;
 
 // 为每个调度队列中thread分配的时间片
-static int splices[MLFQ_SIZE] = {2,4,8};
+static int splices[MLFQ_SIZE] = {3,5,7};
 
 /**
  * 经过指定tick后进行一次mlfq_emerge()
@@ -127,8 +127,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
-  // 此处需要手动添加initial_thread
-  add_to_mlfq(initial_thread,0);
+  // add_to_mlfq(initial_thread,0);
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -155,6 +154,21 @@ priority_less(const struct list_elem *a,const struct list_elem *b,void* aux UNUS
   return list_entry(a,struct thread,ready_elem)->priority > list_entry(b,struct thread,ready_elem)->priority;
 }
 
+void
+remove_from_mlfq(struct thread *t)
+{
+  struct list_elem *e;
+  struct list *l = &mlfq[t->mlfq[MLFQ_SIZE]];
+  for(e = list_begin(l);e != list_end(l);e = list_next(e))
+  {
+    if(e == &t->ready_elem)
+    {
+	list_remove(e);
+	break;
+    }
+  }
+}
+
 /**
  * 修改线程t至指定idx的mlfq队列中
  * idx不能越界，且idx != t->mlfq[MLFQ_SIZE]
@@ -166,9 +180,9 @@ void
 change_to_mlfq(struct thread *t,int idx)
 {
   ASSERT(idx >= 0 && idx < MLFQ_SIZE);
+  ASSERT(is_thread(t));
   if(idx != t->mlfq[MLFQ_SIZE])
   {
-    list_remove(&t->ready_elem);
     list_insert_ordered(&mlfq[idx],&t->ready_elem,priority_less,NULL);
     t->mlfq[MLFQ_SIZE] = idx;
   }
@@ -181,9 +195,13 @@ void
 add_to_mlfq(struct thread *t,int idx)
 {
   ASSERT(idx >= 0 && idx < MLFQ_SIZE);
+  ASSERT(is_thread(t));
   list_insert_ordered(&mlfq[idx],&t->ready_elem,priority_less,NULL);
   t->mlfq[MLFQ_SIZE] = idx;
 }
+
+
+
 //set and get of thread t's rest time in special mlfq
 void
 set_rest_time(struct thread *t,int idx)
@@ -197,12 +215,19 @@ get_rest_time(struct thread *t,int idx)
   return t->mlfq[idx];
 }
 
+void
+thread_set_status(struct thread *t,enum thread_status status)
+{
+  t->status = status;
+}
+
 // 一段时间后需要将所有非最高优先级队列thread上浮到最高优先级，预防饥饿现象
 void
 mlfq_emerge()
 {
   thread_foreach(&change_to_mlfq,0);
   thread_foreach(&set_rest_time,0);
+  thread_foreach(&thread_set_status,THREAD_READY);
 }
 
 // thread.c
@@ -239,27 +264,16 @@ thread_tick (void)
   // t在其优先队列中分配所得的时间片用完，降低到下一队列中,最低队列除外
   if (!--t->mlfq[t->mlfq[MLFQ_SIZE]])
   {
-    if(t->mlfq[MLFQ_SIZE] < MLFQ_SIZE-1)
-    {
-      change_to_mlfq(t,t->mlfq[MLFQ_SIZE]+1);
-    }
-    else
-    {
-      list_remove(&t->ready_elem);
-      add_to_mlfq(&t->ready_elem,t->mlfq[MLFQ_SIZE]);
-    }
-    // 根据所在队列重新分配时间片
-    set_rest_time(t,t->mlfq[MLFQ_SIZE]);
     intr_yield_on_return();
   }
   /*
     避免饥饿
-  */ 
-  if(!(emerege_time = (emerege_time+1)%EMERGE_TIME))
+  else if(!(emerege_time = (emerege_time+1)%EMERGE_TIME))
   {
     mlfq_emerge();
-    intr_yield_on_return();
+    // intr_yield_on_return();
   }
+  */
 }
 
 /* Prints thread statistics. */
@@ -348,7 +362,6 @@ thread_block (void)
   ASSERT (intr_get_level () == INTR_OFF);
   
   struct thread* t = thread_current();
-  list_remove(&t->ready_elem);
   t->status = THREAD_BLOCKED;
   schedule ();
 }
@@ -425,8 +438,8 @@ thread_exit (void)
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
-  list_remove (&thread_current()->allelem);
-  list_remove(&thread_current()->ready_elem);
+  struct thread* cur = thread_current();
+  list_remove(&cur->allelem);
   thread_current ()->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
@@ -444,11 +457,24 @@ thread_yield (void)
 
   old_level = intr_disable ();
   // 如果cur的时间片有剩余，则将其重新加入调度队列中
-  // 一般情况下此处的时间片应该永不为0，因为在time_interrupt中时间片为0时会重新设置其时间片并调用该函数
-  if (cur != idle_thread && get_rest_time(cur,cur->mlfq[MLFQ_SIZE]))
+  if (cur != idle_thread)
   {
-    list_remove(&cur->ready_elem);
-    add_to_mlfq(cur,cur->mlfq[MLFQ_SIZE]);
+    if(get_rest_time(cur,cur->mlfq[MLFQ_SIZE]))
+    {
+      add_to_mlfq(cur,cur->mlfq[MLFQ_SIZE]);
+    }
+    else
+    {
+      if(cur->mlfq[MLFQ_SIZE] < MLFQ_SIZE-1)
+      {
+	change_to_mlfq(cur,cur->mlfq[MLFQ_SIZE]+1);
+      }
+      else
+      {
+	add_to_mlfq(cur,cur->mlfq[MLFQ_SIZE]);
+      }
+      set_rest_time(cur,cur->mlfq[MLFQ_SIZE]);
+    }
   }
   cur->status = THREAD_READY;
   schedule ();
@@ -660,8 +686,7 @@ next_thread_to_run (void)
   if (list_empty (ready_list))
     return idle_thread;
   else
-    // 不使用pop，以实现RP，因此在thread_exit()中需要添加list_remove(&t->ready_elem)
-    return list_entry (list_front (ready_list), struct thread, ready_elem);
+    return list_entry (list_pop_front (ready_list), struct thread, ready_elem);
 }
 
 /* Completes a thread switch by activating the new thread's page
