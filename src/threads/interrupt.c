@@ -46,6 +46,7 @@ static unsigned int unexpected_cnt[INTR_CNT];
    interrupt returns. */
 static bool in_external_intr;   /* Are we processing an external interrupt? */
 static bool yield_on_return;    /* Should we yield on interrupt return? */
+static bool emerge_on_return;    /* Should we emerge threads on interrupt return? */
 
 /* Programmable Interrupt Controller helpers. */
 static void pic_init (void);
@@ -224,6 +225,13 @@ intr_yield_on_return (void)
   ASSERT (intr_context ());
   yield_on_return = true;
 }
+
+void
+intr_emerge_on_return(void)
+{
+  ASSERT(intr_context());
+  emerge_on_return = true;
+}
 
 /* 8259A Programmable Interrupt Controller. */
 
@@ -383,8 +391,12 @@ intr_handler (struct intr_frame *frame)
       in_external_intr = false;
       pic_end_of_interrupt (frame->vec_no); 
 
-      if (yield_on_return) 
-        thread_yield(); 
+      if (yield_on_return || emerge_on_return) 
+      {
+        emerge_on_return = false;
+        thread_yield();
+      }
+      
     }
 }
 

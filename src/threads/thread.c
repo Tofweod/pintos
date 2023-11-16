@@ -38,11 +38,12 @@ struct list mlfq[MLFQ_SIZE];
 static struct list* ready_list;
 
 // 为每个调度队列中thread分配的时间片
+// 时间片的划分会影响mlfq的效能，但此处不作优化
 static int splices[MLFQ_SIZE] = {3,5,7};
 
 /**
  * 经过指定tick后进行一次mlfq_emerge()
- * 需要注意该值的设定与splices数组以及调度策略有关，需要经过实践以得到更为优化的取值
+ * 需要注意该值的设定与splices数组以及调度策略有关，需要经过实践以得到更为优化的取值，此处不作优化
 */
 #define EMERGE_TIME 50
 static int emerege_time = 0;
@@ -94,6 +95,14 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+// implemenet of mlfq
+static bool priority_less(const struct list_elem *a,const struct list_elem *b,void* aux UNUSED);
+static void change_to_mlfq(struct thread *t,int idx);
+static void add_to_mlfq(struct thread *t,int idx);
+static void set_rest_time(struct thread *t,int idx);
+static int get_rest_time(struct thread *t,int idx);
+static void schedule_to_mlfq(struct thread* t);
+static void mlfq_emerge_except(struct thread* except);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -147,7 +156,12 @@ thread_start (void)
   sema_down (&idle_started);
 }
 
-// 根据进程的优先级进行比较
+/**
+ * 根据进程的优先级进行比较
+ * priority_less()实现了如下规则：
+ * 1.若优先级A>B,则调度A
+ * 2.若优先级A=B,则FCFS
+*/
 bool
 priority_less(const struct list_elem *a,const struct list_elem *b,void* aux UNUSED)
 {
@@ -172,9 +186,6 @@ remove_from_mlfq(struct thread *t)
 /**
  * 修改线程t至指定idx的mlfq队列中
  * idx不能越界，且idx != t->mlfq[MLFQ_SIZE]
- * 此处调用的priority_less()实现了如下规则：
- * 1.若优先级A>B,则调度A
- * 2.若优先级A=B,则FCFS
 */
 void
 change_to_mlfq(struct thread *t,int idx)
@@ -200,7 +211,21 @@ add_to_mlfq(struct thread *t,int idx)
   t->mlfq[MLFQ_SIZE] = idx;
 }
 
-
+/**
+ * 当t在对应优先队列中剩余时间片为0时，降低其到下一优先级队列，最低队列除外
+*/
+void schedule_to_mlfq(struct thread* cur)
+{
+  if (cur->mlfq[MLFQ_SIZE] < MLFQ_SIZE - 1)
+  {
+    change_to_mlfq(cur, cur->mlfq[MLFQ_SIZE] + 1);
+  }
+  else
+  {
+    add_to_mlfq(cur, cur->mlfq[MLFQ_SIZE]);
+  }
+  set_rest_time(cur, cur->mlfq[MLFQ_SIZE]);
+}
 
 //set and get of thread t's rest time in special mlfq
 void
@@ -215,19 +240,27 @@ get_rest_time(struct thread *t,int idx)
   return t->mlfq[idx];
 }
 
+/**
+ * 将指定thread t之外所有非最高优先级队列thread上浮到最高优先级，预防饥饿现象
+ * 一般此处的t均为thread_current()
+ * 此函数需要在中断禁止条件下执行
+ * 311行注释说明为什么thread_current()不用上浮
+*/
 void
-thread_set_status(struct thread *t,enum thread_status status)
+mlfq_emerge_except(struct thread* except)
 {
-  t->status = status;
-}
+  ASSERT(intr_get_level() == INTR_OFF)
+  ASSERT(intr_context());
 
-// 一段时间后需要将所有非最高优先级队列thread上浮到最高优先级，预防饥饿现象
-void
-mlfq_emerge()
-{
-  thread_foreach(&change_to_mlfq,0);
-  thread_foreach(&set_rest_time,0);
-  thread_foreach(&thread_set_status,THREAD_READY);
+  struct list_elem *e;
+  for(e=list_begin(&all_list);e != list_end(&all_list);e = list_next(e))
+  {
+    struct thread *t = list_entry(e,struct thread,allelem);
+    if(t == except) continue;
+    change_to_mlfq(t,0);
+    set_rest_time(t,0);
+    t->status = THREAD_READY;
+  }
 }
 
 // thread.c
@@ -267,11 +300,15 @@ thread_tick (void)
     intr_yield_on_return();
   }
   /*
-    避免饥饿
-  else if(!(emerege_time = (emerege_time+1)%EMERGE_TIME))
+    避免饥饿,确保在指定emerge_time之后一定发生emerge
+    intr_merge_on_return()如同intr_yield_on_return()，会在intr_handle()内调用mlfq_emerge()
+    假设mlfq_emerge_except()将所有threads提升到最高进程，那么t可能会在mlfq中重复出现
+    且当前进程时间片用完时不将其emerge也是一种合理的实现
+  
+  if(!(emerege_time = (emerege_time+1)%EMERGE_TIME))
   {
-    mlfq_emerge();
-    // intr_yield_on_return();
+    mlfq_emerge_except(t);
+    intr_emerge_on_return();
   }
   */
 }
@@ -383,8 +420,11 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  // 将唤醒thread置于最高优先级队列
-  // 因为t一定是blocked，因此其是thread_create()或thread_block()来的,即不在优先队列中，可放心加入
+  /**
+   * 将唤醒thread置于最高优先级队列
+   * 我的想法时当一个thread在满足IO和sleep结束后被唤醒时，应立即做出响应，因此放在最优级队列
+   * 因为t一定是blocked，因此其是thread_create()或thread_block()来的,即不在优先队列中，可放心加入
+  */
   add_to_mlfq(t,0);
   t->status = THREAD_READY;
   intr_set_level (old_level);
@@ -456,24 +496,17 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  // 如果cur的时间片有剩余，则将其重新加入调度队列中
   if (cur != idle_thread)
   {
     if(get_rest_time(cur,cur->mlfq[MLFQ_SIZE]))
     {
+      // 如果cur的时间片有剩余，则将其重新加入调度队列中
       add_to_mlfq(cur,cur->mlfq[MLFQ_SIZE]);
     }
     else
     {
-      if(cur->mlfq[MLFQ_SIZE] < MLFQ_SIZE-1)
-      {
-	change_to_mlfq(cur,cur->mlfq[MLFQ_SIZE]+1);
-      }
-      else
-      {
-	add_to_mlfq(cur,cur->mlfq[MLFQ_SIZE]);
-      }
-      set_rest_time(cur,cur->mlfq[MLFQ_SIZE]);
+      // 否则降级
+      schedule_to_mlfq(cur);
     }
   }
   cur->status = THREAD_READY;
