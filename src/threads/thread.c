@@ -44,8 +44,9 @@ static int splices[MLFQ_SIZE] = {3,5,7};
 /**
  * 经过指定tick后进行一次mlfq_emerge()
  * 需要注意该值的设定与splices数组以及调度策略有关，需要经过实践以得到更为优化的取值，此处不作优化
+ * 该值既不能太大也不能太小
 */
-#define EMERGE_TIME 50
+#define EMERGE_TIME 10000
 static int emerege_time = 0;
 
 /* List of all processes.  Processes are added to this list
@@ -97,11 +98,12 @@ void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 // implemenet of mlfq
 static bool priority_less(const struct list_elem *a,const struct list_elem *b,void* aux UNUSED);
+// 对mlfq做修改时的参数t，均已假设t不在所有的mlfqs中且不作保证，因此需要谨慎使用
 static void change_to_mlfq(struct thread *t,int idx);
 static void add_to_mlfq(struct thread *t,int idx);
+static void schedule_to_mlfq(struct thread* t);
 static void set_rest_time(struct thread *t,int idx);
 static int get_rest_time(struct thread *t,int idx);
-static void schedule_to_mlfq(struct thread* t);
 static void mlfq_emerge_except(struct thread* except);
 
 /* Initializes the threading system by transforming the code
@@ -241,7 +243,7 @@ get_rest_time(struct thread *t,int idx)
 }
 
 /**
- * 将指定thread t之外所有非最高优先级队列thread上浮到最高优先级，预防饥饿现象
+ * 将指定thread t之外所有非最高优先级队列中thread上浮到最高优先级，预防饥饿现象
  * 一般此处的t均为thread_current()
  * 此函数需要在中断禁止条件下执行
  * 311行注释说明为什么thread_current()不用上浮
@@ -253,13 +255,22 @@ mlfq_emerge_except(struct thread* except)
   ASSERT(intr_context());
 
   struct list_elem *e;
-  for(e=list_begin(&all_list);e != list_end(&all_list);e = list_next(e))
+  int i;
+  for(int i = 1;i < MLFQ_SIZE;i++)
   {
-    struct thread *t = list_entry(e,struct thread,allelem);
-    if(t == except) continue;
-    change_to_mlfq(t,0);
-    set_rest_time(t,0);
-    t->status = THREAD_READY;
+    for(e = list_begin(&mlfq[i]);e != list_end(&mlfq[i]);)
+    {
+      struct thread *t = list_entry(e,struct thread,ready_elem);
+      if(t == except)
+      {
+        e = list_next(e);
+        continue;
+      }
+      list_remove(e);
+      change_to_mlfq(t,0);
+      set_rest_time(t,0);
+      t->status = THREAD_READY;
+    }
   }
 }
 
@@ -304,13 +315,13 @@ thread_tick (void)
     intr_merge_on_return()如同intr_yield_on_return()，会在intr_handle()内调用mlfq_emerge()
     假设mlfq_emerge_except()将所有threads提升到最高进程，那么t可能会在mlfq中重复出现
     且当前进程时间片用完时不将其emerge也是一种合理的实现
-  
+  */
   if(!(emerege_time = (emerege_time+1)%EMERGE_TIME))
   {
     mlfq_emerge_except(t);
     intr_emerge_on_return();
   }
-  */
+
 }
 
 /* Prints thread statistics. */
