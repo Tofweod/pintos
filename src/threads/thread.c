@@ -49,6 +49,13 @@ static int splices[MLFQ_SIZE] = {3,5,7};
 #define EMERGE_TIME 10000
 static int emerege_time = 0;
 
+/**
+ * 抢占标识，用于实现抢占式调度
+ * 当下所有的实现均是非抢占式的，需要在thread_current()剩余时间片用完后再thread_yield调度
+ * 抢占式调度运行在其时间片有剩余时也能直接进行thread_yield
+*/
+static bool PREEMPT_NOW = false;
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
@@ -97,11 +104,18 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 // implemenet of mlfq
+/**
+ * 调度策略函数集合，目前仅有priority_less
+ */
 static bool priority_less(const struct list_elem *a,const struct list_elem *b,void* aux UNUSED);
-// 对mlfq做修改时的参数t，均已假设t不在所有的mlfqs中且不作保证，因此需要谨慎使用
+/**
+ * 对mlfq操作的函数集合
+ * 下面三个函数对mlfq做修改时的参数t，均已假设t不在所有的mlfqs中且不作保证，因此需要谨慎使用
+*/
 static void change_to_mlfq(struct thread *t,int idx);
 static void add_to_mlfq(struct thread *t,int idx);
 static void schedule_to_mlfq(struct thread* t);
+
 static void set_rest_time(struct thread *t,int idx);
 static int get_rest_time(struct thread *t,int idx);
 static void mlfq_emerge_except(struct thread* except);
@@ -170,6 +184,7 @@ priority_less(const struct list_elem *a,const struct list_elem *b,void* aux UNUS
   return list_entry(a,struct thread,ready_elem)->priority > list_entry(b,struct thread,ready_elem)->priority;
 }
 
+// UNUSED
 void
 remove_from_mlfq(struct thread *t)
 {
@@ -179,8 +194,8 @@ remove_from_mlfq(struct thread *t)
   {
     if(e == &t->ready_elem)
     {
-	list_remove(e);
-	break;
+	    list_remove(e);
+	    break;
     }
   }
 }
@@ -213,6 +228,20 @@ add_to_mlfq(struct thread *t,int idx)
   t->mlfq[MLFQ_SIZE] = idx;
 }
 
+
+/**
+ * 抢占式地将某一线程直接添加到对应mlfq队列头部
+ * 需要与抢占标识
+*/
+void
+preempt_add_to_mlfq(struct thread *t,int idx)
+{
+  ASSERT(idx >= 0 && idx < MLFQ_SIZE);
+  ASSERT(is_thread(t));
+  list_push_front(&mlfq[i],&t->ready_elem);
+  t->mlfq[MLFQ_SIZE] = idx;
+}
+
 /**
  * 当t在对应优先队列中剩余时间片为0时，降低其到下一优先级队列，最低队列除外
 */
@@ -233,6 +262,8 @@ void schedule_to_mlfq(struct thread* cur)
 void
 set_rest_time(struct thread *t,int idx)
 {
+  // 对于idle_thread，其分配的时间片恒为最少的一类
+  if(t == idle_thread) idx = 0;
   t->mlfq[idx] = splices[idx];
 }
 
@@ -246,7 +277,7 @@ get_rest_time(struct thread *t,int idx)
  * 将指定thread t之外所有非最高优先级队列中thread上浮到最高优先级，预防饥饿现象
  * 一般此处的t均为thread_current()
  * 此函数需要在中断禁止条件下执行
- * 311行注释说明为什么thread_current()不用上浮
+ * thread_tick()中最后注释说明为什么thread_current()不上浮
 */
 void
 mlfq_emerge_except(struct thread* except)
@@ -266,7 +297,7 @@ mlfq_emerge_except(struct thread* except)
         e = list_next(e);
         continue;
       }
-      list_remove(e);
+      e = list_remove(e);
       change_to_mlfq(t,0);
       set_rest_time(t,0);
       t->status = THREAD_READY;
@@ -312,7 +343,7 @@ thread_tick (void)
   }
   /*
     避免饥饿,确保在指定emerge_time之后一定发生emerge
-    intr_merge_on_return()如同intr_yield_on_return()，会在intr_handle()内调用mlfq_emerge()
+    intr_merge_on_return()如同intr_yield_on_return()，会在intr_handle()内调用thread_yield()来在emerge之后重新调度
     假设mlfq_emerge_except()将所有threads提升到最高进程，那么t可能会在mlfq中重复出现
     且当前进程时间片用完时不将其emerge也是一种合理的实现
   */
