@@ -23,6 +23,8 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+/* 反馈队列数 */
+#define MLFQ_SIZE 3
 
 /* A kernel thread or user process.
 
@@ -89,7 +91,7 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     int waiting_time;                   /* 剩余等待时间片 */
-    int mlfq[4];                        /* 线程在每个ready队列中剩余时间配额,共三个队列，mlfq[MLFQ_SIZE]表示现在进程所处队列序号 */
+    int mlfq[MLFQ_SIZE+1];                        /* 线程在每个ready队列中剩余时间配额,共三个队列，mlfq[MLFQ_SIZE]表示现在进程所处队列序号 */
     struct list_elem allelem;           /* List element for all threads list. */
 
     struct list_elem ready_elem;

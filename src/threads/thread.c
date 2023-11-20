@@ -20,8 +20,7 @@
    of thread.h for details. */
 #define THREAD_MAGIC 0xcd6abf4b
 
-/* 三级反馈队列 */
-#define MLFQ_SIZE 3
+
 /**
  * 将每个优先队列与其对应的调度策略封装
  * 目前只是用简单的priority_less(),因此不使用该结构体
@@ -39,14 +38,14 @@ static struct list* ready_list;
 
 // 为每个调度队列中thread分配的时间片
 // 时间片的划分会影响mlfq的效能，但此处不作优化
-static int splices[MLFQ_SIZE] = {3,5,7};
+static int splices[MLFQ_SIZE] = {9,17,25};
 
 /**
  * 经过指定tick后进行一次mlfq_emerge()
  * 需要注意该值的设定与splices数组以及调度策略有关，需要经过实践以得到更为优化的取值，此处不作优化
  * 该值既不能太大也不能太小
 */
-#define EMERGE_TIME 10000
+#define EMERGE_TIME 50
 static int emerege_time = 0;
 
 /**
@@ -231,11 +230,12 @@ add_to_mlfq(struct thread *t,int idx)
 
 /**
  * 抢占式地将某一线程直接添加到对应mlfq队列头部
- * 需要与抢占标识
+ * 需要在设置抢占标识PREEMPT_NOW之后才能使用
 */
 void
 preempt_add_to_mlfq(struct thread *t,int idx)
 {
+  ASSERT(PREEMPT_NOW);
   ASSERT(idx >= 0 && idx < MLFQ_SIZE);
   ASSERT(is_thread(t));
   list_push_front(&mlfq[i],&t->ready_elem);
