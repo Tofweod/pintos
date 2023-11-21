@@ -91,10 +91,10 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     int waiting_time;                   /* 剩余等待时间片 */
-    int mlfq[MLFQ_SIZE+1];                        /* 线程在每个ready队列中剩余时间配额,共三个队列，mlfq[MLFQ_SIZE]表示现在进程所处队列序号 */
+    int mlfq[MLFQ_SIZE+1];              /* 线程在每个ready队列中剩余时间配额,共三个队列，mlfq[MLFQ_SIZE]表示现在进程所处队列序号 */
     struct list_elem allelem;           /* List element for all threads list. */
 
-    struct list_elem ready_elem;
+    struct list_elem ready_elem;        /* elem还会用在同步中，初版使用elem作为ready_list元素导致混乱，因此引入ready_elem专供就绪队列使用 */
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 

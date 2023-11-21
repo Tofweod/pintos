@@ -33,7 +33,7 @@
 struct list mlfq[MLFQ_SIZE];
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
-// next_to_run()使用，当前需要被调度队列的指针
+// next_thread_to_run()使用，当前需要被调度队列的指针
 static struct list* ready_list;
 
 // 为每个调度队列中thread分配的时间片
@@ -109,7 +109,7 @@ static tid_t allocate_tid (void);
 static bool priority_less(const struct list_elem *a,const struct list_elem *b,void* aux UNUSED);
 /**
  * 对mlfq操作的函数集合
- * 下面三个函数对mlfq做修改时的参数t，均已假设t不在所有的mlfqs中且不作保证，因此需要谨慎使用
+ * 下面三个函数对mlfq做修改时的参数t，均已假设t不在所有的mlfqs中且不作保证，因此请在调用函数前说明调用处安全的原因
 */
 static void change_to_mlfq(struct thread *t,int idx);
 static void add_to_mlfq(struct thread *t,int idx);
@@ -244,9 +244,11 @@ preempt_add_to_mlfq(struct thread *t,int idx)
 
 /**
  * 当t在对应优先队列中剩余时间片为0时，降低其到下一优先级队列，最低队列除外
+ * change_to_mlfq和add_to_mlfq只将t放入指定就绪队列中，并不改变t的剩余时间片，但该函数会重新设置时间片
 */
 void schedule_to_mlfq(struct thread* cur)
 {
+  // schedule_to_mlfq的使用前提就是cur不在其就绪队列中，因此change_to_mlfq以及add_to_mlfq使用安全
   if (cur->mlfq[MLFQ_SIZE] < MLFQ_SIZE - 1)
   {
     change_to_mlfq(cur, cur->mlfq[MLFQ_SIZE] + 1);
@@ -298,6 +300,7 @@ mlfq_emerge_except(struct thread* except)
         continue;
       }
       e = list_remove(e);
+      // 上一行已将t从所在就绪队列中删除
       change_to_mlfq(t,0);
       set_rest_time(t,0);
       t->status = THREAD_READY;
@@ -538,6 +541,7 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
+  // thread_yield()中的cur是从schedule()中调度而来的，而在schedule()中已使用list_pop_front()将cur从其就绪队列中删除，因此对cur的就绪队列操作函数安全
   if (cur != idle_thread)
   {
     if(get_rest_time(cur,cur->mlfq[MLFQ_SIZE]))
