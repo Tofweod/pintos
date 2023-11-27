@@ -238,7 +238,7 @@ preempt_add_to_mlfq(struct thread *t,int idx)
   ASSERT(PREEMPT_NOW);
   ASSERT(idx >= 0 && idx < MLFQ_SIZE);
   ASSERT(is_thread(t));
-  list_push_front(&mlfq[i],&t->ready_elem);
+  list_push_front(&mlfq[idx],&t->ready_elem);
   t->mlfq[MLFQ_SIZE] = idx;
 }
 
@@ -289,7 +289,7 @@ mlfq_emerge_except(struct thread* except)
 
   struct list_elem *e;
   int i;
-  for(int i = 1;i < MLFQ_SIZE;i++)
+  for(i = 1;i < MLFQ_SIZE;i++)
   {
     for(e = list_begin(&mlfq[i]);e != list_end(&mlfq[i]);)
     {
