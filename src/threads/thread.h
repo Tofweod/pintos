@@ -5,6 +5,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "float.h"
 #include "synch.h"
 
 /* States in a thread's life cycle. */
@@ -96,6 +97,11 @@ struct thread
     struct list locks;
     struct lock *waiting_lock;
 
+
+    // mlfq
+    int nice;
+    fp_t recent_cpu;
+
     struct list_elem allelem;           /* List element for all threads list. */
 
     /* Shared between thread.c and synch.c. */
@@ -116,7 +122,7 @@ struct thread
 extern bool thread_mlfqs;
 
 
-struct list *ready_list();
+struct list *ready_list(void);
 
 void thread_init (void);
 void thread_start (void);
@@ -150,6 +156,12 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 bool thread_priority_less(const struct list_elem *lhs, const struct list_elem *rhs,void *aux UNUSED);
+
+// mlfq
+void increase_recent_cpu(void);
+void update_load_avg_and_recent_cpu(void);
+void update_priority(struct thread *t);
+void update_recent_cpu(struct thread *t,void *aux);
 
 
 #endif /* threads/thread.h */

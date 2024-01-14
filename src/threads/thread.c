@@ -1,10 +1,13 @@
 #include "threads/thread.h"
 #include <debug.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include <devices/timer.h>
+#include "float.h"
 #include "thread.h"
 #include "threads/flags.h"
 #include "threads/interrupt.h"
@@ -24,6 +27,7 @@
 
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
+// turn no-local static object into local static
 struct list* ready_list() {
   static struct list ready_list;
   return &ready_list;
@@ -63,6 +67,7 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+fp_t load_avg;
 
 static void kernel_thread (thread_func *, void *aux);
 
@@ -116,6 +121,7 @@ thread_start (void)
   sema_init (&idle_started, 0);
   thread_create ("idle", PRI_MIN, idle, &idle_started);
 
+  load_avg = N_2_FP(0);
   /* Start preemptive thread scheduling. */
   intr_enable ();
 
@@ -139,6 +145,17 @@ thread_tick (void)
 #endif
   else
     kernel_ticks++;
+
+  int ticks = timer_ticks();
+  if(thread_mlfqs) {
+    increase_recent_cpu();
+    if(ticks % 4 == 0) {
+      update_priority(thread_current());
+    }
+    if(ticks % TIMER_FREQ == 0) {
+      update_load_avg_and_recent_cpu();
+    }
+  }
 
   thread_foreach(sleep_check,NULL); 
 
@@ -378,6 +395,10 @@ void
 thread_set_nice (int nice UNUSED) 
 {
   /* Not yet implemented. */
+  struct thread *cur = thread_current();
+  cur->nice = nice;
+  update_priority(cur);
+  thread_yield();
 }
 
 /* Returns the current thread's nice value. */
@@ -385,7 +406,8 @@ int
 thread_get_nice (void) 
 {
   /* Not yet implemented. */
-  return 0;
+  // return 0;
+  return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
@@ -393,7 +415,8 @@ int
 thread_get_load_avg (void) 
 {
   /* Not yet implemented. */
-  return 0;
+  // return 0;
+  return FP_2_N_I(MUL_X_N(load_avg,100));
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
@@ -401,7 +424,8 @@ int
 thread_get_recent_cpu (void) 
 {
   /* Not yet implemented. */
-  return 0;
+  // return 0;
+  return FP_2_N_I(MUL_X_N(thread_current()->recent_cpu,100));
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -491,10 +515,16 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  // timer_sleep
   t->sleeping_time = 0;
+  // priority
   t->base_priority = priority;
   list_init(&t->locks);
   t->waiting_lock = NULL;
+  // mlfq
+  t->nice = 0;
+  t->recent_cpu = N_2_FP(0);
+
 
   old_level = intr_disable ();
   // list_push_back (&all_list, &t->allelem);
@@ -632,4 +662,45 @@ sleep_check(struct thread *t,void *aux UNUSED){
 bool
 thread_priority_less(const struct list_elem *lhs, const struct list_elem *rhs, void *aux UNUSED) {
   return list_entry(lhs,struct thread,elem)->priority > list_entry(rhs,struct thread,elem)->priority;
+}
+
+void
+increase_recent_cpu() {
+  ASSERT(thread_mlfqs);
+
+  struct thread *cur = thread_current();
+  if(cur == idle_thread) return;
+  cur->recent_cpu = ADD_X_N(cur->recent_cpu,1); 
+}
+
+void
+update_load_avg_and_recent_cpu() {
+  ASSERT(thread_mlfqs);
+
+  size_t ready_threads = list_size(ready_list()) + (thread_current() == idle_thread?0:1);
+
+  load_avg = DIV_X_N(ADD_X_N(MUL_X_N(load_avg,59),ready_threads),60);
+
+  enum intr_level old_level = intr_disable();
+  thread_foreach(update_recent_cpu,NULL);
+  intr_set_level(old_level);
+}
+
+void
+update_priority(struct thread *t) {
+  ASSERT(thread_mlfqs);
+  if(t == idle_thread) return;
+
+  t->priority = PRI_MAX - FP_2_N_I(DIV_X_N(t->recent_cpu,4)) - (t->nice)*2;
+  t->priority = t->priority < PRI_MIN ? PRI_MIN:t->priority;
+  t->priority = t->priority > PRI_MAX ? PRI_MAX:t->priority;
+}
+
+void update_recent_cpu(struct thread *t, void *aux) {
+  ASSERT(thread_mlfqs);
+  if(t==idle_thread) return;
+
+  t->recent_cpu = ADD_X_N(MUL_X_Y(DIV_X_Y(MUL_X_N(load_avg,2),ADD_X_N(MUL_X_N(load_avg,2),1)),t->recent_cpu),t->nice);
+
+  update_priority(t);
 }
