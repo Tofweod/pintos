@@ -2,6 +2,8 @@
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,7 +28,6 @@
 #endif
 
 
-static void push_argument(void **esp,int argc,int *argv);
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
@@ -37,28 +38,31 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
+  char *fn_copy0,*fn_copy1;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  fn_copy0 = palloc_get_page (0);
+  fn_copy1 = palloc_get_page (0);
+  if (fn_copy0 == NULL || fn_copy1 == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (fn_copy0, file_name, PGSIZE);
+  strlcpy (fn_copy1, file_name, PGSIZE);
 
 
   // sperate filename and arguments
   char *save_ptr;
-  file_name = strtok_r((char*)file_name," ",&save_ptr);
+  char *proc_name = strtok_r(fn_copy0," ",&save_ptr);
 
-  // TODO: meet problem when use DEBUG_PRINTF
   // DEBUG_PRINTF("filename is %s\n",file_name);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  tid = thread_create (proc_name, PRI_DEFAULT, start_process, fn_copy1);
+  if (tid == TID_ERROR) {
+    palloc_free_page (fn_copy0); 
+    palloc_free_page (fn_copy1); 
+  }
   return tid;
 }
 
@@ -68,6 +72,10 @@ static void
 start_process (void *file_name_)
 {
   char *file_name = file_name_;
+  char *copy = palloc_get_page(0);
+  strlcpy(copy,file_name_,PGSIZE);
+
+
   struct intr_frame if_;
   bool success;
 
@@ -85,21 +93,44 @@ start_process (void *file_name_)
   success = load (file_name, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  if (success) {
-    int argc = 0;
-    int argv[50];
-    for (token = strtok_r(file_name," ",&save_ptr); token != NULL; token = strtok_r(NULL," ",&save_ptr)) {
-      if_.esp -= (strlen(token)+1);
-      memcpy(if_.esp,token,strlen(token)+1);
-      argv[argc++] = (int)if_.esp;
-    }
-    push_argument(&if_.esp,argc,argv);
-  }
-  else {
-    palloc_free_page (file_name);
+  if(!success)
     thread_exit();
+
+  int argc = 0;
+  void *argv[128];
+
+  if_.esp = PHYS_BASE;
+
+  for(token = strtok_r(copy," ",&save_ptr);token != NULL; token = strtok_r(NULL," ",&save_ptr)) {
+    size_t len = strlen(token) + 1;
+    if_.esp -= len;
+    memcpy(if_.esp,token,len);
+    argv[argc++] = if_.esp;
   }
 
+  // align
+  uintptr_t align = (uintptr_t)if_.esp;
+  if(align % 4 != 0) align -= align % 4;
+  if_.esp = (void*)align;
+
+  size_t ptr_size = sizeof(void*);
+  if_.esp -= ptr_size;
+  memset(if_.esp,0,ptr_size);
+  for(int i = argc-1;i >= 0;i--) {
+    if_.esp -= ptr_size;
+    memcpy(if_.esp,&argv[i],ptr_size);
+  }
+
+  if_.esp -= ptr_size;
+  *(uintptr_t*)if_.esp = ((uintptr_t)if_.esp + ptr_size);
+  if_.esp -= ptr_size;
+  *(int*)if_.esp = argc;
+
+  if_.esp -= ptr_size;
+  memset(if_.esp,0,ptr_size);
+
+  // printf("STACK SET .ESP:%p\n",if_.esp);
+  // hex_dump((uintptr_t)if_.esp,if_.esp,100,true);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -121,8 +152,12 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
+  while(1) {
+    thread_yield();
+    if(thread_dead(child_tid)) break;
+  }
   return -1;
 }
 
@@ -131,6 +166,7 @@ void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
+  printf("%s: exit(%d)\n",cur->name,cur->exit_code);
   uint32_t *pd;
 
   /* Destroy the current process's page directory and switch back
@@ -497,22 +533,4 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
-}
-
-void
-push_argument(void **esp,int argc,int argv[]) {
-  *esp = (int)*esp & 0xfffffffc;
-  *esp -= 4;
-  *(int*)*esp = 0;
-  for(int i = argc - 1;i >= 0;i --) {
-    *esp -= 4;
-    *(int*)*esp = argv[i];
-  }
-  *esp -= 4;
-  *(int*)*esp = (int)*esp+4;
-  *esp -= 4;
-  *(int*)*esp = argc;
-  *esp -= 4;
-  *(int*)*esp = 0;
-
 }

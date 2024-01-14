@@ -100,6 +100,8 @@ struct thread
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
+    int exit_code;
+
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
@@ -139,5 +141,8 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+// for userprog-arguments passing
+int thread_dead(tid_t tid);
 
 #endif /* threads/thread.h */

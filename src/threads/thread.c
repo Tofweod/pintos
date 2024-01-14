@@ -473,6 +473,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   t->sleeping_time = 0;
 
+  t->exit_code = 0;
+
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
@@ -606,3 +608,13 @@ static bool
 priority_less(const struct list_elem *lhs, const struct list_elem *rhs, void *aux UNUSED) {
   return list_entry(lhs,struct thread,elem)->priority > list_entry(rhs,struct thread,elem)->priority;
 }
+
+int thread_dead(tid_t tid) {
+  struct list_elem *e;
+  for(e = list_begin(&all_list);e != list_end(&all_list);e = list_next(e)) {
+    struct thread *t = list_entry(e,struct thread,allelem);
+    if(t->tid == tid) return 0;
+  }
+  return 1;
+}
+
