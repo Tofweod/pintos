@@ -517,7 +517,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
   // timer_sleep
   t->sleeping_time = 0;
-  // priority
+  // priority-donation
   t->base_priority = priority;
   list_init(&t->locks);
   t->waiting_lock = NULL;
