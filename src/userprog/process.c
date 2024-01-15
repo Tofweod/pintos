@@ -84,6 +84,7 @@ start_process (void *file_name_)
   char *token;
   file_name = strtok_r(file_name," ",&save_ptr);
 
+  // DEBUG_PRINTF("filename is %s\n",file_name);
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
