@@ -18,8 +18,8 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
-
-#if 1
+#define IS_DEBUG
+#ifdef IS_DEBUG
 #define DEBUG_PRINTF printf
 #else
 #define DEBUG_PRINTF
@@ -52,7 +52,6 @@ process_execute (const char *file_name)
   char *save_ptr;
   file_name = strtok_r((char*)file_name," ",&save_ptr);
 
-  // TODO: meet problem when use DEBUG_PRINTF
   // DEBUG_PRINTF("filename is %s\n",file_name);
 
   /* Create a new thread to execute FILE_NAME. */
